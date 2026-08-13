@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "SideNotes - Split View Note Taking",
-  "version": "1.0.1",
-  "description": "Smart split-browser side panel note taking extension with Markdown support, instant web page capture, and offline local storage.",
+  "version": "1.1.0",
+  "description": "Smart split-browser side panel note taking extension with Markdown support, instant web page capture, and multi-device cloud sync.",
   "icons": {
     "16": "icons/icon-16.png",
     "48": "icons/icon-48.png",

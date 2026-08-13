@@ -1,18 +1,19 @@
 {
   "name": "sidenotes-chrome-extension",
-  "version": "1.0.1",
-  "description": "Smart split-browser side panel note taking extension with Impeccable Design System.",
+  "version": "1.1.0",
+  "description": "Smart split-browser side panel note taking extension with Impeccable Design System & multi-device sync.",
   "main": "service-worker.js",
   "scripts": {
     "icons": "node generate_icons.js",
-    "build:zip": "zip -r sidenotes.zip manifest.json service-worker.js icons sidepanel README.md CHROMEWEBSTORE.md",
-    "package": "node generate_icons.js && zip -r sidenotes.zip manifest.json service-worker.js icons sidepanel README.md CHROMEWEBSTORE.md"
+    "build:zip": "node package.js",
+    "package": "node package.js"
   },
   "keywords": [
     "chrome-extension",
     "side-panel",
     "notes",
-    "markdown"
+    "markdown",
+    "sync"
   ],
   "author": "",
   "license": "MIT"

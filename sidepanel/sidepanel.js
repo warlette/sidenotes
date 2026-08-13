@@ -1,4 +1,4 @@
-// SideNotes Side Panel Application Logic
+// SideNotes Side Panel Application Logic — Version 1.1.0 with Multi-Device Sync
 
 document.addEventListener('DOMContentLoaded', () => {
   // App State
@@ -9,6 +9,12 @@ document.addEventListener('DOMContentLoaded', () => {
   let currentCategoryFilter = 'ALL';
   let searchQuery = '';
   let isEditingMode = true;
+
+  // Sync & Storage Settings State
+  let storageMode = 'local'; // 'local' or 'sync'
+  let gistPat = '';
+  let gistId = '';
+  let lastGistSync = '';
 
   // DOM Element References
   const notesListEl = document.getElementById('notes-list');
@@ -50,14 +56,82 @@ document.addEventListener('DOMContentLoaded', () => {
   const exportAllBtn = document.getElementById('export-all-btn');
   const importFileInput = document.getElementById('import-file-input');
 
+  // Settings Modal Elements
+  const settingsOpenBtn = document.getElementById('settings-open-btn');
+  const settingsModal = document.getElementById('settings-modal');
+  const settingsCloseBtn = document.getElementById('settings-close-btn');
+  const settingsSaveBtn = document.getElementById('settings-save-btn');
+  const gistPatInput = document.getElementById('gist-pat-input');
+  const gistIdInput = document.getElementById('gist-id-input');
+  const gistPushBtn = document.getElementById('gist-push-btn');
+  const gistPullBtn = document.getElementById('gist-pull-btn');
+  const gistSyncStatus = document.getElementById('gist-sync-status');
+
   // Initialize
   initApp();
 
   async function initApp() {
+    await loadSettings();
     await loadThemePreference();
     await loadNotesFromStorage();
     setupEventListeners();
     setupRuntimeListeners();
+  }
+
+  // --- Storage Driver Abstraction ---
+  function getStorageArea() {
+    return storageMode === 'sync' && chrome.storage.sync ? chrome.storage.sync : chrome.storage.local;
+  }
+
+  async function loadSettings() {
+    const data = await chrome.storage.local.get(['sidenotes_storage_mode', 'sidenotes_gist_pat', 'sidenotes_gist_id', 'sidenotes_last_sync']);
+    storageMode = data.sidenotes_storage_mode || 'local';
+    gistPat = data.sidenotes_gist_pat || '';
+    gistId = data.sidenotes_gist_id || '';
+    lastGistSync = data.sidenotes_last_sync || '';
+
+    // Populate modal controls
+    const radio = document.querySelector(`input[name="storage-mode"][value="${storageMode}"]`);
+    if (radio) radio.checked = true;
+    gistPatInput.value = gistPat;
+    gistIdInput.value = gistId;
+    updateGistStatusUI();
+  }
+
+  async function saveSettingsFromModal() {
+    const selectedRadio = document.querySelector('input[name="storage-mode"]:checked');
+    const newStorageMode = selectedRadio ? selectedRadio.value : 'local';
+    gistPat = gistPatInput.value.trim();
+    gistId = gistIdInput.value.trim();
+
+    await chrome.storage.local.set({
+      sidenotes_storage_mode: newStorageMode,
+      sidenotes_gist_pat: gistPat,
+      sidenotes_gist_id: gistId
+    });
+
+    if (newStorageMode !== storageMode) {
+      storageMode = newStorageMode;
+      // Re-save notes to new driver
+      await saveNotesToStorage();
+      showToast(`Switched storage mode to ${storageMode.toUpperCase()}`);
+    } else {
+      showToast('Settings saved');
+    }
+
+    settingsModal.classList.add('hidden');
+  }
+
+  function updateGistStatusUI() {
+    if (lastGistSync) {
+      const dateStr = new Date(lastGistSync).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      gistSyncStatus.textContent = `Status: Last synced at ${dateStr}`;
+      gistSyncStatus.style.borderColor = 'var(--accent-border)';
+    } else if (gistPat) {
+      gistSyncStatus.textContent = 'Status: Token configured (ready to sync)';
+    } else {
+      gistSyncStatus.textContent = 'Status: Not connected';
+    }
   }
 
   // --- Theme Management ---
@@ -76,12 +150,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // --- Storage & Data Loading ---
   async function loadNotesFromStorage() {
-    const data = await chrome.storage.local.get(['sidenotes_list', 'sidenotes_active_id']);
+    const driver = getStorageArea();
+    let data = await driver.get(['sidenotes_list', 'sidenotes_active_id']);
+    
+    // Fallback check in local if sync was empty
+    if ((!data.sidenotes_list || data.sidenotes_list.length === 0) && storageMode === 'sync') {
+      data = await chrome.storage.local.get(['sidenotes_list', 'sidenotes_active_id']);
+    }
+
     notes = data.sidenotes_list || [];
     activeNoteId = data.sidenotes_active_id || null;
 
     if (notes.length === 0) {
-      // Create initial welcome note if empty
       const welcomeNote = createWelcomeNote();
       notes = [welcomeNote];
       activeNoteId = welcomeNote.id;
@@ -98,10 +178,19 @@ document.addEventListener('DOMContentLoaded', () => {
     saveStatusEl.textContent = 'Saving...';
     saveStatusEl.className = 'save-status saving';
 
-    await chrome.storage.local.set({
+    const driver = getStorageArea();
+    await driver.set({
       sidenotes_list: notes,
       sidenotes_active_id: activeNoteId
     });
+
+    // Also mirror to local as a safety backup
+    if (storageMode === 'sync') {
+      await chrome.storage.local.set({
+        sidenotes_list: notes,
+        sidenotes_active_id: activeNoteId
+      });
+    }
 
     setTimeout(() => {
       saveStatusEl.textContent = 'Saved';
@@ -121,15 +210,153 @@ document.addEventListener('DOMContentLoaded', () => {
     }, 500);
   }
 
+  // --- GitHub Gist Cloud Sync Client ---
+  async function pushToGitHubGist() {
+    const token = gistPatInput.value.trim() || gistPat;
+    if (!token) {
+      showToast('Please enter a GitHub Personal Access Token first');
+      return;
+    }
+
+    syncCurrentEditorToMemory();
+    gistSyncStatus.textContent = 'Status: Pushing notes to GitHub Gist...';
+
+    const payload = {
+      description: 'SideNotes Chrome Extension Backup',
+      public: false,
+      files: {
+        'sidenotes_backup.json': {
+          content: JSON.stringify(notes, null, 2)
+        }
+      }
+    };
+
+    try {
+      let url = 'https://api.github.com/gists';
+      let method = 'POST';
+
+      if (gistId) {
+        url += `/${gistId}`;
+        method = 'PATCH';
+      }
+
+      const response = await fetch(url, {
+        method: method,
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Accept': 'application/vnd.github+json',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(payload)
+      });
+
+      if (!response.ok) {
+        const errJson = await response.json().catch(() => ({}));
+        throw new Error(errJson.message || `HTTP ${response.status}`);
+      }
+
+      const result = await response.json();
+      gistId = result.id;
+      gistIdInput.value = gistId;
+      lastGistSync = new Date().toISOString();
+
+      await chrome.storage.local.set({
+        sidenotes_gist_pat: token,
+        sidenotes_gist_id: gistId,
+        sidenotes_last_sync: lastGistSync
+      });
+
+      updateGistStatusUI();
+      showToast('Successfully pushed notes to GitHub Gist! 🎉');
+    } catch (err) {
+      console.error('Gist push error:', err);
+      gistSyncStatus.textContent = `Error: ${err.message}`;
+      showToast('Gist Push Failed');
+    }
+  }
+
+  async function pullFromGitHubGist() {
+    const token = gistPatInput.value.trim() || gistPat;
+    const currentGistId = gistIdInput.value.trim() || gistId;
+
+    if (!token || !currentGistId) {
+      showToast('Please enter both Token and Gist ID to pull');
+      return;
+    }
+
+    gistSyncStatus.textContent = 'Status: Pulling notes from GitHub Gist...';
+
+    try {
+      const response = await fetch(`https://api.github.com/gists/${currentGistId}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Accept': 'application/vnd.github+json'
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const result = await response.json();
+      const backupFile = result.files && result.files['sidenotes_backup.json'];
+
+      if (!backupFile || !backupFile.content) {
+        throw new Error('sidenotes_backup.json not found in Gist');
+      }
+
+      const remoteNotes = JSON.parse(backupFile.content);
+      if (!Array.isArray(remoteNotes)) {
+        throw new Error('Invalid notes data in Gist');
+      }
+
+      // Merge remote notes with local notes (by id and latest updatedAt)
+      const noteMap = new Map();
+      notes.forEach((n) => noteMap.set(n.id, n));
+
+      let addedOrUpdated = 0;
+      remoteNotes.forEach((rn) => {
+        const local = noteMap.get(rn.id);
+        if (!local || new Date(rn.updatedAt) > new Date(local.updatedAt)) {
+          noteMap.set(rn.id, rn);
+          addedOrUpdated++;
+        }
+      });
+
+      notes = Array.from(noteMap.values());
+      if (notes.length > 0 && !notes.some((n) => n.id === activeNoteId)) {
+        activeNoteId = notes[0].id;
+      }
+
+      lastGistSync = new Date().toISOString();
+      await chrome.storage.local.set({
+        sidenotes_gist_pat: token,
+        sidenotes_gist_id: currentGistId,
+        sidenotes_last_sync: lastGistSync
+      });
+
+      await saveNotesToStorage();
+      renderNotesList();
+      loadActiveNoteIntoEditor();
+      updateGistStatusUI();
+
+      showToast(`Pulled & merged ${addedOrUpdated} note(s) from Gist!`);
+    } catch (err) {
+      console.error('Gist pull error:', err);
+      gistSyncStatus.textContent = `Error: ${err.message}`;
+      showToast('Gist Pull Failed');
+    }
+  }
+
   // --- Initial Welcome Note ---
   function createWelcomeNote() {
     const timestamp = new Date().toISOString();
     return {
       id: 'note_welcome',
       title: '✨ Welcome to SideNotes (Impeccable Edition)',
-      content: `# Welcome to SideNotes 👑\n\n*Styled with the Impeccable Kin-paku Design System*\n\n### Core Features:\n- 📝 **Markdown Workspace**: Headers, **bold**, *italic*, blockquotes, and \`code snippets\`.\n- 🌐 **Instant Web Capture**: Click **"Clip Page"** or use right-click context menu on any webpage to grab links & selections.\n- 🏷️ **Categories & Search**: Organize your thoughts with custom tags and real-time search.\n- 💾 **100% Offline & Private**: All notes stay strictly on your local browser via \`chrome.storage.local\`.\n\nTry creating a new note using the **"+ New"** button above!`,
+      content: `# Welcome to SideNotes 👑\n\n*Styled with the Impeccable Kin-paku Design System*\n\n### Core Features:\n- 📝 **Markdown Workspace**: Headers, **bold**, *italic*, blockquotes, and \`code snippets\`.\n- 🌐 **Instant Web Capture**: Click **"Clip Page"** or use right-click context menu on any webpage to grab links & selections.\n- 🔄 **Multi-Device Sync**: Sync notes natively via **Chrome Account Sync** or **GitHub Gists**.\n- 🏷️ **Categories & Search**: Organize your thoughts with custom tags and real-time search.\n- 💾 **Local & Private**: All notes stay strictly on your browser or private cloud sync.\n\nTry creating a new note using the **"+ New"** button above!`,
       category: 'General',
-      tags: ['welcome', 'impeccable'],
+      tags: ['welcome', 'impeccable', 'sync'],
       pinned: true,
       createdAt: timestamp,
       updatedAt: timestamp
@@ -346,7 +573,6 @@ document.addEventListener('DOMContentLoaded', () => {
           ['web-clip']
         );
       } else {
-        // Append to current note
         editorTextarea.value += (editorTextarea.value ? '\n\n' : '') + snippetMarkdown;
         triggerAutoSave();
         updateStats();
@@ -449,7 +675,6 @@ document.addEventListener('DOMContentLoaded', () => {
     html = html.replace(/^- \[x\] (.*$)/gim, '<div><input type="checkbox" checked disabled> $1</div>');
     // Bullet lists
     html = html.replace(/^- (.*$)/gim, '<ul><li>$1</li></ul>');
-    // Clean redundant consecutive uls
     html = html.replace(/<\/ul>\s*<ul>/g, '');
     // Bold / Italic / Strike
     html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
@@ -559,6 +784,13 @@ document.addEventListener('DOMContentLoaded', () => {
     newNoteBtn.addEventListener('click', () => createNewNote());
     themeToggleBtn.addEventListener('click', toggleTheme);
     toggleListBtn.addEventListener('click', () => notesDrawer.classList.toggle('collapsed'));
+
+    // Settings Modal Events
+    settingsOpenBtn.addEventListener('click', () => settingsModal.classList.remove('hidden'));
+    settingsCloseBtn.addEventListener('click', () => settingsModal.classList.add('hidden'));
+    settingsSaveBtn.addEventListener('click', saveSettingsFromModal);
+    gistPushBtn.addEventListener('click', pushToGitHubGist);
+    gistPullBtn.addEventListener('click', pullFromGitHubGist);
 
     // Drawer Filter / Search
     searchInput.addEventListener('input', (e) => {
