@@ -552,31 +552,63 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
       }
 
-      const contextData = {
-        title: tab.title || 'Web Page',
-        url: tab.url || ''
-      };
+      let selectedText = '';
+      let pageTitle = tab.title || 'Web Page';
+      let pageUrl = tab.url || '';
+      let pageDesc = '';
+
+      // Execute script in active tab to capture selection & page meta description
+      try {
+        const results = await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: () => {
+            const selection = window.getSelection() ? window.getSelection().toString().trim() : '';
+            const desc = document.querySelector('meta[name="description"]')?.content ||
+                         document.querySelector('meta[property="og:description"]')?.content || '';
+            return { selection, desc, title: document.title, url: window.location.href };
+          }
+        });
+
+        if (results && results[0] && results[0].result) {
+          const res = results[0].result;
+          if (res.selection) selectedText = res.selection;
+          if (res.desc) pageDesc = res.desc;
+          if (res.title) pageTitle = res.title;
+          if (res.url) pageUrl = res.url;
+        }
+      } catch (err) {
+        console.log('Script execution note:', err.message);
+        // Fallback for chrome:// internal pages where content scripting is restricted
+      }
 
       const dateStr = new Date().toLocaleDateString(undefined, {
         month: 'short',
         day: 'numeric',
-        year: 'numeric'
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
       });
 
-      const snippetMarkdown = `### [${contextData.title}](${contextData.url})\n\n*Captured on ${dateStr}*\n`;
+      let contentBody = `### [${pageTitle}](${pageUrl})\n\n`;
+      if (selectedText) {
+        contentBody += `> ${selectedText}\n\n`;
+      } else if (pageDesc) {
+        contentBody += `> *${pageDesc}*\n\n`;
+      }
+      contentBody += `*Captured on ${dateStr}*\n`;
 
       if (createAsNewNote || !activeNoteId) {
         await createNewNote(
-          contextData.title.length > 40 ? contextData.title.substring(0, 40) + '...' : contextData.title,
-          snippetMarkdown,
+          pageTitle.length > 40 ? pageTitle.substring(0, 40) + '...' : pageTitle,
+          contentBody,
           'Web Snippets',
           ['web-clip']
         );
       } else {
-        editorTextarea.value += (editorTextarea.value ? '\n\n' : '') + snippetMarkdown;
+        editorTextarea.value += (editorTextarea.value ? '\n\n' : '') + contentBody;
         triggerAutoSave();
         updateStats();
-        showToast('Page context added to active note');
+        showToast('Page context & selection clipped to active note!');
       }
     } catch (err) {
       console.error('Error capturing page:', err);

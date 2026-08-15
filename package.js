@@ -13,18 +13,11 @@ const genericZipPath = path.join(__dirname, 'sidenotes.zip');
 
 console.log(`📦 Packaging SideNotes version ${version}...`);
 
-// Generate PNG icons first to be certain icons exist
-try {
-  execSync('node generate_icons.js', { stdio: 'inherit', cwd: __dirname });
-} catch (err) {
-  console.error('Error generating icons:', err.message);
-}
-
 // Remove old zip files if present
 if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
 if (fs.existsSync(genericZipPath)) fs.unlinkSync(genericZipPath);
 
-// Create versioned zip archive
+// Create versioned zip archive including user's custom replaced icons
 const zipCmd = `zip -r "${zipName}" manifest.json service-worker.js icons sidepanel README.md CHROMEWEBSTORE.md privacy.html docs`;
 try {
   execSync(zipCmd, { stdio: 'inherit', cwd: __dirname });

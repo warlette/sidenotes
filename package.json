@@ -1,6 +1,6 @@
 {
   "name": "sidenotes-chrome-extension",
-  "version": "1.1.0",
+  "version": "1.1.2",
   "description": "Smart split-browser side panel note taking extension with Impeccable Design System & multi-device sync.",
   "main": "service-worker.js",
   "scripts": {
