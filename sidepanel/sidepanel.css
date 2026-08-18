@@ -799,6 +799,31 @@ html, body {
   line-height: 1.4;
 }
 
+.info-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background-color: var(--bg-input);
+  border: 1px solid var(--border-color);
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+}
+.info-icon {
+  font-size: 16px;
+}
+.badge-experimental {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  background-color: var(--accent-light);
+  color: var(--accent-primary);
+  border: 1px solid var(--accent-border);
+  padding: 1px 4px;
+  border-radius: 3px;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+
 .radio-group {
   display: flex;
   flex-direction: column;

@@ -1,4 +1,5 @@
-// SideNotes Side Panel Application Logic — Version 1.1.0 with Multi-Device Sync
+// SideNotes Side Panel Application Logic — Version 1.1.2 Production Release
+// Impeccable Design System with Canonical Local Storage & Optional Gist Sync
 
 document.addEventListener('DOMContentLoaded', () => {
   // App State
@@ -10,8 +11,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let searchQuery = '';
   let isEditingMode = true;
 
-  // Sync & Storage Settings State
-  let storageMode = 'local'; // 'local' or 'sync'
+  // GitHub Gist Sync State
   let gistPat = '';
   let gistId = '';
   let lastGistSync = '';
@@ -65,9 +65,10 @@ document.addEventListener('DOMContentLoaded', () => {
   const gistIdInput = document.getElementById('gist-id-input');
   const gistPushBtn = document.getElementById('gist-push-btn');
   const gistPullBtn = document.getElementById('gist-pull-btn');
+  const gistDisconnectBtn = document.getElementById('gist-disconnect-btn');
   const gistSyncStatus = document.getElementById('gist-sync-status');
 
-  // Initialize
+  // Initialize Application
   initApp();
 
   async function initApp() {
@@ -78,48 +79,74 @@ document.addEventListener('DOMContentLoaded', () => {
     setupRuntimeListeners();
   }
 
-  // --- Storage Driver Abstraction ---
-  function getStorageArea() {
-    return storageMode === 'sync' && chrome.storage.sync ? chrome.storage.sync : chrome.storage.local;
+  // --- Defensive Note Normalization ---
+  function normalizeNote(n) {
+    if (!n || typeof n !== 'object') return null;
+    const now = new Date().toISOString();
+    return {
+      id: typeof n.id === 'string' && n.id.trim() ? n.id.trim() : 'note_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
+      title: typeof n.title === 'string' && n.title.trim() ? n.title.trim() : 'Untitled Note',
+      content: typeof n.content === 'string' ? n.content : '',
+      category: typeof n.category === 'string' && n.category ? n.category : 'General',
+      tags: Array.isArray(n.tags) ? n.tags.filter((t) => typeof t === 'string' && t.trim()) : [],
+      pinned: Boolean(n.pinned),
+      createdAt: n.createdAt && !isNaN(Date.parse(n.createdAt)) ? n.createdAt : now,
+      updatedAt: n.updatedAt && !isNaN(Date.parse(n.updatedAt)) ? n.updatedAt : now
+    };
   }
 
+  // --- Settings & Gist Configuration ---
   async function loadSettings() {
-    const data = await chrome.storage.local.get(['sidenotes_storage_mode', 'sidenotes_gist_pat', 'sidenotes_gist_id', 'sidenotes_last_sync']);
-    storageMode = data.sidenotes_storage_mode || 'local';
-    gistPat = data.sidenotes_gist_pat || '';
-    gistId = data.sidenotes_gist_id || '';
-    lastGistSync = data.sidenotes_last_sync || '';
+    try {
+      const data = await chrome.storage.local.get(['sidenotes_gist_pat', 'sidenotes_gist_id', 'sidenotes_last_sync']);
+      gistPat = data.sidenotes_gist_pat || '';
+      gistId = data.sidenotes_gist_id || '';
+      lastGistSync = data.sidenotes_last_sync || '';
 
-    // Populate modal controls
-    const radio = document.querySelector(`input[name="storage-mode"][value="${storageMode}"]`);
-    if (radio) radio.checked = true;
-    gistPatInput.value = gistPat;
-    gistIdInput.value = gistId;
-    updateGistStatusUI();
+      gistPatInput.value = gistPat;
+      gistIdInput.value = gistId;
+      updateGistStatusUI();
+    } catch (err) {
+      console.error('Error loading settings:', err);
+    }
   }
 
   async function saveSettingsFromModal() {
-    const selectedRadio = document.querySelector('input[name="storage-mode"]:checked');
-    const newStorageMode = selectedRadio ? selectedRadio.value : 'local';
     gistPat = gistPatInput.value.trim();
     gistId = gistIdInput.value.trim();
 
-    await chrome.storage.local.set({
-      sidenotes_storage_mode: newStorageMode,
-      sidenotes_gist_pat: gistPat,
-      sidenotes_gist_id: gistId
-    });
-
-    if (newStorageMode !== storageMode) {
-      storageMode = newStorageMode;
-      // Re-save notes to new driver
-      await saveNotesToStorage();
-      showToast(`Switched storage mode to ${storageMode.toUpperCase()}`);
-    } else {
+    try {
+      await chrome.storage.local.set({
+        sidenotes_gist_pat: gistPat,
+        sidenotes_gist_id: gistId
+      });
+      updateGistStatusUI();
       showToast('Settings saved');
+    } catch (err) {
+      console.error('Error saving settings:', err);
+      showToast('Failed to save settings');
     }
 
     settingsModal.classList.add('hidden');
+  }
+
+  async function disconnectGistSync() {
+    if (!confirm('Are you sure you want to disconnect GitHub Gist sync and remove your token?')) return;
+
+    gistPat = '';
+    gistId = '';
+    lastGistSync = '';
+    gistPatInput.value = '';
+    gistIdInput.value = '';
+
+    try {
+      await chrome.storage.local.remove(['sidenotes_gist_pat', 'sidenotes_gist_id', 'sidenotes_last_sync']);
+      updateGistStatusUI();
+      showToast('Disconnected GitHub Gist sync');
+    } catch (err) {
+      console.error('Error disconnecting Gist:', err);
+      showToast('Failed to disconnect Gist sync');
+    }
   }
 
   function updateGistStatusUI() {
@@ -131,43 +158,62 @@ document.addEventListener('DOMContentLoaded', () => {
       gistSyncStatus.textContent = 'Status: Token configured (ready to sync)';
     } else {
       gistSyncStatus.textContent = 'Status: Not connected';
+      gistSyncStatus.style.borderColor = 'var(--border-color)';
     }
   }
 
   // --- Theme Management ---
   async function loadThemePreference() {
-    const { sidenotes_theme = 'dark' } = await chrome.storage.local.get('sidenotes_theme');
-    document.documentElement.setAttribute('data-theme', sidenotes_theme);
+    try {
+      const { sidenotes_theme = 'dark' } = await chrome.storage.local.get('sidenotes_theme');
+      document.documentElement.setAttribute('data-theme', sidenotes_theme);
+    } catch (err) {
+      document.documentElement.setAttribute('data-theme', 'dark');
+    }
   }
 
   async function toggleTheme() {
     const currentTheme = document.documentElement.getAttribute('data-theme');
     const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
     document.documentElement.setAttribute('data-theme', newTheme);
-    await chrome.storage.local.set({ sidenotes_theme: newTheme });
-    showToast(`Switched to ${newTheme} mode`);
+    try {
+      await chrome.storage.local.set({ sidenotes_theme: newTheme });
+      showToast(`Switched to ${newTheme} mode`);
+    } catch (err) {
+      console.error('Error setting theme:', err);
+    }
   }
 
-  // --- Storage & Data Loading ---
+  // --- Storage & Data Loading (Canonical Local Database) ---
   async function loadNotesFromStorage() {
-    const driver = getStorageArea();
-    let data = await driver.get(['sidenotes_list', 'sidenotes_active_id']);
-    
-    // Fallback check in local if sync was empty
-    if ((!data.sidenotes_list || data.sidenotes_list.length === 0) && storageMode === 'sync') {
-      data = await chrome.storage.local.get(['sidenotes_list', 'sidenotes_active_id']);
-    }
+    try {
+      const data = await chrome.storage.local.get(['sidenotes_list', 'sidenotes_active_id']);
+      const rawList = data.sidenotes_list;
 
-    notes = data.sidenotes_list || [];
-    activeNoteId = data.sidenotes_active_id || null;
+      if (Array.isArray(rawList) && rawList.length > 0) {
+        notes = rawList.map(normalizeNote).filter(Boolean);
+      } else {
+        notes = [];
+      }
 
-    if (notes.length === 0) {
-      const welcomeNote = createWelcomeNote();
-      notes = [welcomeNote];
-      activeNoteId = welcomeNote.id;
-      await saveNotesToStorage();
-    } else if (!notes.some((n) => n.id === activeNoteId)) {
-      activeNoteId = notes[0].id;
+      activeNoteId = data.sidenotes_active_id || null;
+
+      if (notes.length === 0) {
+        const welcomeNote = createWelcomeNote();
+        notes = [welcomeNote];
+        activeNoteId = welcomeNote.id;
+        await saveNotesToStorage();
+      } else if (!notes.some((n) => n.id === activeNoteId)) {
+        activeNoteId = notes[0].id;
+      }
+    } catch (err) {
+      console.error('Error loading notes from storage:', err);
+      showToast('Error loading local notes');
+      if (notes.length === 0) {
+        const welcomeNote = createWelcomeNote();
+        notes = [welcomeNote];
+        activeNoteId = welcomeNote.id;
+      }
     }
 
     renderNotesList();
@@ -178,24 +224,22 @@ document.addEventListener('DOMContentLoaded', () => {
     saveStatusEl.textContent = 'Saving...';
     saveStatusEl.className = 'save-status saving';
 
-    const driver = getStorageArea();
-    await driver.set({
-      sidenotes_list: notes,
-      sidenotes_active_id: activeNoteId
-    });
-
-    // Also mirror to local as a safety backup
-    if (storageMode === 'sync') {
+    try {
       await chrome.storage.local.set({
         sidenotes_list: notes,
         sidenotes_active_id: activeNoteId
       });
-    }
 
-    setTimeout(() => {
-      saveStatusEl.textContent = 'Saved';
-      saveStatusEl.className = 'save-status';
-    }, 400);
+      setTimeout(() => {
+        saveStatusEl.textContent = 'Saved';
+        saveStatusEl.className = 'save-status';
+      }, 400);
+    } catch (err) {
+      console.error('Error saving notes:', err);
+      saveStatusEl.textContent = 'Save Error';
+      saveStatusEl.className = 'save-status saving';
+      showToast('Failed to save notes locally');
+    }
   }
 
   function triggerAutoSave() {
@@ -222,11 +266,15 @@ document.addEventListener('DOMContentLoaded', () => {
     gistSyncStatus.textContent = 'Status: Pushing notes to GitHub Gist...';
 
     const payload = {
-      description: 'SideNotes Chrome Extension Backup',
+      description: 'SideNotes Backup',
       public: false,
       files: {
         'sidenotes_backup.json': {
-          content: JSON.stringify(notes, null, 2)
+          content: JSON.stringify({
+            schemaVersion: 1,
+            exportedAt: new Date().toISOString(),
+            notes: notes
+          }, null, 2)
         }
       }
     };
@@ -251,6 +299,9 @@ document.addEventListener('DOMContentLoaded', () => {
       });
 
       if (!response.ok) {
+        if (response.status === 401) {
+          throw new Error('Invalid or expired GitHub token');
+        }
         const errJson = await response.json().catch(() => ({}));
         throw new Error(errJson.message || `HTTP ${response.status}`);
       }
@@ -267,9 +318,9 @@ document.addEventListener('DOMContentLoaded', () => {
       });
 
       updateGistStatusUI();
-      showToast('Successfully pushed notes to GitHub Gist! 🎉');
+      showToast('Pushed notes to GitHub Gist! 🎉');
     } catch (err) {
-      console.error('Gist push error:', err);
+      console.error('Gist push failed:', err.message);
       gistSyncStatus.textContent = `Error: ${err.message}`;
       showToast('Gist Push Failed');
     }
@@ -295,6 +346,9 @@ document.addEventListener('DOMContentLoaded', () => {
       });
 
       if (!response.ok) {
+        if (response.status === 401) {
+          throw new Error('Invalid or expired GitHub token');
+        }
         throw new Error(`HTTP ${response.status}`);
       }
 
@@ -305,10 +359,14 @@ document.addEventListener('DOMContentLoaded', () => {
         throw new Error('sidenotes_backup.json not found in Gist');
       }
 
-      const remoteNotes = JSON.parse(backupFile.content);
-      if (!Array.isArray(remoteNotes)) {
-        throw new Error('Invalid notes data in Gist');
+      const parsedData = JSON.parse(backupFile.content);
+      const rawRemoteNotes = Array.isArray(parsedData) ? parsedData : (parsedData && Array.isArray(parsedData.notes) ? parsedData.notes : null);
+
+      if (!rawRemoteNotes) {
+        throw new Error('Invalid notes structure in Gist file');
       }
+
+      const remoteNotes = rawRemoteNotes.map(normalizeNote).filter(Boolean);
 
       // Merge remote notes with local notes (by id and latest updatedAt)
       const noteMap = new Map();
@@ -342,7 +400,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       showToast(`Pulled & merged ${addedOrUpdated} note(s) from Gist!`);
     } catch (err) {
-      console.error('Gist pull error:', err);
+      console.error('Gist pull failed:', err.message);
       gistSyncStatus.textContent = `Error: ${err.message}`;
       showToast('Gist Pull Failed');
     }
@@ -353,10 +411,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const timestamp = new Date().toISOString();
     return {
       id: 'note_welcome',
-      title: '✨ Welcome to SideNotes (Impeccable Edition)',
-      content: `# Welcome to SideNotes 👑\n\n*Styled with the Impeccable Kin-paku Design System*\n\n### Core Features:\n- 📝 **Markdown Workspace**: Headers, **bold**, *italic*, blockquotes, and \`code snippets\`.\n- 🌐 **Instant Web Capture**: Click **"Clip Page"** or use right-click context menu on any webpage to grab links & selections.\n- 🔄 **Multi-Device Sync**: Sync notes natively via **Chrome Account Sync** or **GitHub Gists**.\n- 🏷️ **Categories & Search**: Organize your thoughts with custom tags and real-time search.\n- 💾 **Local & Private**: All notes stay strictly on your browser or private cloud sync.\n\nTry creating a new note using the **"+ New"** button above!`,
+      title: '✨ Welcome to SideNotes',
+      content: `# Welcome to SideNotes 👑\n\n*Your split-browser research notebook*\n\n### Key Features:\n- 📝 **Markdown Workspace**: Headers, **bold**, *italic*, blockquotes, and \`code snippets\`.\n- 🌐 **Instant Web Capture**: Click **"Clip Page"** or use right-click context menu on any webpage to grab links & selections.\n- 🏷️ **Categories & Search**: Organize your thoughts with custom tags and real-time search.\n- 🔄 **Optional Gist Backup**: Sync notes to a private GitHub Gist using your own Personal Access Token.\n- 💾 **100% Local & Private**: All notes stay strictly on your local browser database.\n\nTry creating a new note using the **"+ New"** button above!`,
       category: 'General',
-      tags: ['welcome', 'impeccable', 'sync'],
+      tags: ['welcome', 'sidenotes'],
       pinned: true,
       createdAt: timestamp,
       updatedAt: timestamp
@@ -739,7 +797,11 @@ document.addEventListener('DOMContentLoaded', () => {
       filename += '.txt';
       mimeType = 'text/plain';
     } else if (format === 'json') {
-      content = JSON.stringify(note, null, 2);
+      content = JSON.stringify({
+        schemaVersion: 1,
+        exportedAt: new Date().toISOString(),
+        note: note
+      }, null, 2);
       filename += '.json';
       mimeType = 'application/json';
     }
@@ -749,10 +811,15 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function exportAllNotesJSON() {
-    const content = JSON.stringify(notes, null, 2);
+    const backupObj = {
+      schemaVersion: 1,
+      exportedAt: new Date().toISOString(),
+      notes: notes
+    };
+    const content = JSON.stringify(backupObj, null, 2);
     const dateStr = new Date().toISOString().split('T')[0];
     downloadBlob(content, `sidenotes_backup_${dateStr}.json`, 'application/json');
-    showToast('Exported all notes');
+    showToast('Exported all notes backup');
   }
 
   function importNotesJSON(event) {
@@ -762,37 +829,53 @@ document.addEventListener('DOMContentLoaded', () => {
     const reader = new FileReader();
     reader.onload = async (e) => {
       try {
-        const imported = JSON.parse(e.target.result);
-        const importedList = Array.isArray(imported) ? imported : [imported];
+        const parsed = JSON.parse(e.target.result);
+        const rawList = Array.isArray(parsed) ? parsed : (parsed && Array.isArray(parsed.notes) ? parsed.notes : (parsed && parsed.content ? [parsed] : null));
+
+        if (!rawList) {
+          showToast('Invalid JSON file: No notes array found');
+          return;
+        }
+
+        const validImported = rawList.map(normalizeNote).filter(Boolean);
+
+        if (validImported.length === 0) {
+          showToast('No valid notes found in file');
+          return;
+        }
+
+        if (!confirm(`Found ${validImported.length} note(s) in backup file. Do you want to import and merge them into your workspace?`)) {
+          return;
+        }
+
+        const noteMap = new Map();
+        notes.forEach((n) => noteMap.set(n.id, n));
 
         let addedCount = 0;
-        importedList.forEach((item) => {
-          if (item.content) {
-            notes.unshift({
-              id: 'note_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
-              title: item.title || 'Imported Note',
-              content: item.content || '',
-              category: item.category || 'General',
-              tags: item.tags || [],
-              pinned: Boolean(item.pinned),
-              createdAt: item.createdAt || new Date().toISOString(),
-              updatedAt: new Date().toISOString()
-            });
+        validImported.forEach((item) => {
+          if (!noteMap.has(item.id)) {
+            noteMap.set(item.id, item);
+            addedCount++;
+          } else {
+            // Give duplicate imported note a unique new ID
+            item.id = 'note_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5);
+            noteMap.set(item.id, item);
             addedCount++;
           }
         });
 
-        if (addedCount > 0) {
+        notes = Array.from(noteMap.values());
+        if (notes.length > 0) {
           activeNoteId = notes[0].id;
-          renderNotesList();
-          loadActiveNoteIntoEditor();
-          await saveNotesToStorage();
-          showToast(`Imported ${addedCount} note(s)`);
-        } else {
-          showToast('No valid notes found in file');
         }
+
+        renderNotesList();
+        loadActiveNoteIntoEditor();
+        await saveNotesToStorage();
+        showToast(`Imported ${addedCount} note(s) successfully!`);
       } catch (err) {
-        showToast('Invalid JSON file format');
+        console.error('Import error:', err);
+        showToast('Failed to parse JSON backup file');
       }
     };
     reader.readAsText(file);
@@ -823,6 +906,9 @@ document.addEventListener('DOMContentLoaded', () => {
     settingsSaveBtn.addEventListener('click', saveSettingsFromModal);
     gistPushBtn.addEventListener('click', pushToGitHubGist);
     gistPullBtn.addEventListener('click', pullFromGitHubGist);
+    if (gistDisconnectBtn) {
+      gistDisconnectBtn.addEventListener('click', disconnectGistSync);
+    }
 
     // Drawer Filter / Search
     searchInput.addEventListener('input', (e) => {

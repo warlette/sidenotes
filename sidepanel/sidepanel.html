@@ -215,39 +215,30 @@
   <div id="settings-modal" class="modal-backdrop hidden">
     <div class="modal-card">
       <div class="modal-header">
-        <h3>Sync & Storage Settings</h3>
+        <h3>Settings & Sync</h3>
         <button id="settings-close-btn" class="icon-btn">&times;</button>
       </div>
       <div class="modal-body">
         <section class="settings-section">
-          <h4>1. Chrome Storage Mode</h4>
-          <p class="settings-desc">Choose how notes are stored locally inside Chrome.</p>
-          <div class="radio-group">
-            <label class="radio-label">
-              <input type="radio" name="storage-mode" value="local" checked>
-              <div>
-                <strong>Local Storage (`chrome.storage.local`)</strong>
-                <span class="radio-sub">Fastest, unlimited local storage on this computer.</span>
-              </div>
-            </label>
-            <label class="radio-label">
-              <input type="radio" name="storage-mode" value="sync">
-              <div>
-                <strong>Chrome Account Sync (`chrome.storage.sync`)</strong>
-                <span class="radio-sub">Automatically mirrors notes across your logged-in Chrome browsers.</span>
-              </div>
-            </label>
+          <h4>1. Storage Engine</h4>
+          <p class="settings-desc">SideNotes uses <strong>Local Storage (<code>chrome.storage.local</code>)</strong> as its canonical database.</p>
+          <div class="info-card">
+            <span class="info-icon">💾</span>
+            <div>
+              <strong>100% Offline & Local</strong>
+              <span class="radio-sub">Your notes stay private on this device with zero quota limits or internet dependencies.</span>
+            </div>
           </div>
         </section>
 
         <section class="settings-section">
-          <h4>2. GitHub Gist Cloud Sync</h4>
-          <p class="settings-desc">Sync notes with a private GitHub Gist for cross-browser backup.</p>
+          <h4>2. GitHub Gist Sync <span class="badge-experimental">Advanced</span></h4>
+          <p class="settings-desc">Optional backup & sync across devices using your private GitHub Gist.</p>
 
           <div class="form-group">
-            <label for="gist-pat-input">GitHub Personal Access Token (gasp/pat):</label>
+            <label for="gist-pat-input">GitHub Personal Access Token (PAT):</label>
             <input type="password" id="gist-pat-input" placeholder="ghp_xxxxxxxxxxxx..." autocomplete="off">
-            <span class="field-hint">Requires <code>gist</code> permission on GitHub.</span>
+            <span class="field-hint">Requires classic <code>gist</code> scope on GitHub. Never shared or exported.</span>
           </div>
 
           <div class="form-group">
@@ -256,8 +247,9 @@
           </div>
 
           <div class="sync-actions">
-            <button id="gist-push-btn" class="btn btn-accent btn-sm">⬆️ Push to Cloud Gist</button>
-            <button id="gist-pull-btn" class="btn btn-secondary btn-sm">⬇️ Pull from Cloud Gist</button>
+            <button id="gist-push-btn" class="btn btn-accent btn-sm">⬆️ Push to Gist</button>
+            <button id="gist-pull-btn" class="btn btn-secondary btn-sm">⬇️ Pull from Gist</button>
+            <button id="gist-disconnect-btn" class="btn btn-danger btn-sm">Disconnect</button>
           </div>
 
           <div id="gist-sync-status" class="sync-status">Status: Not connected</div>
